@@ -1,0 +1,19 @@
+{
+    "name": "FVPR.Toolbox",
+    "references": [],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [
+        "System.Drawing.Common.dll",
+        "Newtonsoft.Json.dll",
+        "QRCoder.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
