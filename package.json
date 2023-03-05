@@ -13,7 +13,6 @@
     "com.unity.nuget.newtonsoft-json": "2.0.2"
   },
   "vpmDependencies": {
-    "nuget.net.codecrete.qr-code-generator": "~2.0.3",
     "com.vrchat.core.vpm-resolver": "^0.1.17"
   },
   "hideInEditor": true
