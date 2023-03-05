@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Net;
 using System.Net.Http;
-using Net.Codecrete.QrCodeGenerator;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -29,62 +28,26 @@ namespace FVPR.Toolbox
 			public static HttpContent SerializeContent(params string[] scopes) => new StringContent(Serialize(scopes));
 		}
 
-		private string _userCode;
-		private string _deviceCode;
-		private int _interval;
+		private AuthDeviceResponse _response;
 		private DateTime _lastPollTime = DateTime.MinValue;
 		private DateTime _expiresAt = DateTime.MinValue;
-		private string _verificationUrl;
-
-		private string _directUrl;
-		private Texture2D _qrTexture;
+		private GUIStyle _userCodeStyle;
 		
 		private bool _firstFrame = true;
 
 		private void OnEnable()
 		{
 			// Call the API to get the user code and device code
-			var client = new HttpClient();
-			var response = client.PostAsync(
-				$"{Strings.Url}/api/v1/auth/device",
-				PostData.SerializeContent("identify", "publish")
-			).Result;
+			if (!FvprApi.Auth.Device.POST(out var response, out var error))
+			{
+				Debug.LogError(error.ToString("Failed to start authentication process"));
+				Close();
+				return;
+			}
 			
 			// Parse the response
-			var raw = response.Content.ReadAsStringAsync().Result;
-			var json = JObject.Parse(raw);
-			_userCode = json["user_code"].Value<string>();
-			_deviceCode = json["device_code"].Value<string>();
-			_interval = json["interval"].Value<int>();
-			_expiresAt = DateTime.Now.AddSeconds(json["expires_in"].Value<int>());
-			_verificationUrl = json["verification_uri"].Value<string>();
-			
-			// Generate the data
-			_directUrl = $"{_verificationUrl}?code={_userCode}";
-			var qr = QrCode.EncodeText(_directUrl, QrCode.Ecc.Quartile);
-			var scale = 8;
-			var texture = new Texture2D((qr.Size + 2) * scale, (qr.Size + 2) * scale, TextureFormat.RGBA32, false);
-			
-			// Fill the texture with white
-			for (var y = 0; y < texture.height; y++)
-				for (var x = 0; x < texture.width; x++)
-					texture.SetPixel(x, y, Color.white);
-			
-			// texture.SetPixel(x, y, qr.GetModule(x, y) ? Color.black : Color.white);
-			for (var y = 0; y < qr.Size; y++)
-			{
-				for (var x = 0; x < qr.Size; x++)
-				{
-					var color = qr.GetModule(x, y) ? Color.black : Color.white;
-					
-					for (var i = 0; i < scale; i++)
-						for (var j = 0; j < scale; j++)
-							texture.SetPixel((x + 1) * scale + i, (y + 1) * scale + j, color);
-				}
-			}
-			texture.Apply();
-			texture.FlipVertically();
-			_qrTexture = texture;
+			_response = response;
+			_expiresAt = DateTime.Now.AddSeconds(response.ExpiresIn);
 		}
 
 		private void Poll()
@@ -97,28 +60,26 @@ namespace FVPR.Toolbox
 				return;
 			}
 			
-			if (DateTime.Now - _lastPollTime < TimeSpan.FromSeconds(_interval)) return;
+			if (DateTime.Now - _lastPollTime < TimeSpan.FromSeconds(_response.Interval)) return;
 			_lastPollTime = DateTime.Now;
 
 			// GET /api/v1/device/resolve
-			var client = new HttpClient();
-			var response = client.GetAsync($"{Strings.Url}/api/v1/auth/device/resolve?code={_deviceCode}").Result;
-			if (response.StatusCode != HttpStatusCode.OK) return;
+			// var client = new HttpClient();
+			// var response = client.GetAsync($"{Strings.Url}/api/v1/auth/device/resolve?code={_deviceCode}").Result;
+			// if (response.StatusCode != HttpStatusCode.OK) return;
+			if (!FvprApi.Auth.Device.Resolve.GET(_response.DeviceCode, out var response, out var error)) return;
 			
 			// Parse the response
-			var raw = response.Content.ReadAsStringAsync().Result;
-			var json = JObject.Parse(raw);
-			var token = json["token"].Value<string>();
-			EditorPrefs.SetString(Strings.TokenPref, token);
+			EditorPrefs.SetString(Strings.TokenPref, response.Token);
 			EditorApplication.update -= Poll;
 			GetWindow<SettingsWindow>().Check();
 			Close();
 		}
-		
+
 		private void OnGUI()
 		{
 			Poll();
-			
+
 			if (_firstFrame)
 			{
 				_firstFrame = false;
@@ -129,28 +90,46 @@ namespace FVPR.Toolbox
 					position.height
 				);
 			}
-			
-			GUILayout.FlexibleSpace();
-			EditorGUILayout.Space();
-			
-			var rect = EditorGUILayout.GetControlRect(false, _qrTexture.width);
-			rect.x += (rect.width - _qrTexture.width) / 2;
-			rect.width = _qrTexture.width;
-			GUI.DrawTexture(rect, _qrTexture);
-			
-			EditorGUILayout.Space();
 
-			GUILayout.Label("— OR —", EditorStyles.centeredGreyMiniLabel);
-			
+			if (_userCodeStyle == null)
+			{
+				_userCodeStyle = new GUIStyle("label")
+				{
+					fontSize = 64
+				};
+			}
+
+			GUILayout.FlexibleSpace();
+
+			// CenteredText("Visit the link below (preferably on your phone), select \"add new device\", and enter the following code");
+			CenteredText("Visit the link below (preferably on your phone)");
+			GUILayout.Space(10);
+			CenteredText("Log in, select \"add new device\", and enter the following code");
+
+			GUILayout.FlexibleSpace();
+
+			CenteredText(_response.UserCode, _userCodeStyle);
+
+			GUILayout.FlexibleSpace();
+
 			FvprToolbox.Centered(() =>
 			{
-				if (GUILayout.Button($"{_directUrl}", EditorStyles.linkLabel))
-					Application.OpenURL(_directUrl);
+				if (GUILayout.Button(_response.VerificationUri, EditorStyles.linkLabel))
+					Application.OpenURL(_response.VerificationUri);
 			});
-			
+
 			GUILayout.FlexibleSpace();
 			
 			Repaint();
 		}
+
+		private void CenteredText(string text, GUIStyle style, params GUILayoutOption[] options)
+		{
+			FvprToolbox.Centered(() =>
+			{
+				GUILayout.Label(text, style, options);
+			});
+		}
+		private void CenteredText(string text, params GUILayoutOption[] options) => CenteredText(text, "label", options);
 	}
 }

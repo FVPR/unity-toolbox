@@ -1,7 +1,7 @@
 {
   "name": "foxscore.fvpr",
   "displayName": "FVPR Toolbox",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A set of utilities for publishing packages to FVPR.",
   "author": {
     "name": "FVPR",

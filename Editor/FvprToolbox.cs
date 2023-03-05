@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -19,6 +20,19 @@ namespace FVPR
 			action();
 			GUILayout.FlexibleSpace();
 			EditorGUILayout.EndHorizontal();
+		}
+
+		public static void Mkdir(string path)
+		{
+			if (Directory.Exists(path)) return;
+			var parts = path.Replace("\\", "/").Split('/');
+			var current = "";
+			foreach (var part in parts)
+			{
+				current += part + "/";
+				if (Directory.Exists(current)) continue;
+				Directory.CreateDirectory(current);
+			}
 		}
 	}
 }

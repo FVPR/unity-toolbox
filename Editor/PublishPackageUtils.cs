@@ -2,7 +2,9 @@
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Threading;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -13,6 +15,17 @@ namespace FVPR.Toolbox
 	{
 		private static bool IsLoggedIn()
 		{
+			// Check if the API is reachable
+			if (!FvprApi.Ping.HEAD())
+			{
+				EditorUtility.DisplayDialog(
+					"API unreachable",
+					"Cannot connect to the FVPR API. Please try again later.",
+					"Close"
+				);
+				return false;
+			}
+			
 			var token = EditorPrefs.GetString(Strings.TokenPref);
 			
 			// Check if token is set
@@ -95,70 +108,105 @@ namespace FVPR.Toolbox
 				return;
 			}
 			
-			// Get user info
-			var token = EditorPrefs.GetString(Strings.TokenPref);
-			var client = new HttpClient();
-			client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-			var response = client.GetAsync($"{Strings.Url}/api/v1/whoami").Result;
-			// 503
-			if (response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+			// Check if the API is reachable
+			if (!FvprApi.Ping.HEAD())
 			{
 				EditorUtility.DisplayDialog(
-					"Service Unavailable",
+					"API unreachable",
 					"The FVPR API is currently unavailable. Please try again later.",
 					"Close"
 				);
 				return;
 			}
-			// 401
-			if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+			
+			// Get user info
+			var token = EditorPrefs.GetString(Strings.TokenPref);
+			// var client = new HttpClient();
+			// client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+			// var response = client.GetAsync($"{Strings.Url}/api/v1/whoami").Result;
+			// // 401
+			// if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+			// {
+			// 	EditorUtility.DisplayDialog(
+			// 		"Unauthorized",
+			// 		"The token is invalid. Please login again.",
+			// 		"Close"
+			// 	);
+			// 	EditorPrefs.DeleteKey(Strings.TokenPref);
+			// 	SettingsWindow.ShowWindow();
+			// 	LoginWindow.ShowWindow();
+			// 	return;
+			// }
+			// // 403
+			// if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+			// {
+			// 	var r = JObject.Parse(response.Content.ReadAsStringAsync().Result); 
+			// 	if (!EditorUtility.DisplayDialog(
+			// 		"Forbidden",
+			// 		$"Your account has been locked: {r["reason"].Value<string>()}\n\n" +
+			// 		$"Contact a moderator on our Discord server for more information.",
+			// 		"Close",
+			// 		"Open Discord"
+			// 	))
+			// 		Application.OpenURL($"{Strings.Url}/discord");
+			// 	return;
+			// }
+			// // Not 200
+			// if (response.StatusCode != System.Net.HttpStatusCode.OK)
+			// {
+			// 	EditorUtility.DisplayDialog(
+			// 		"Error",
+			// 		$"Failed to get user data: ({response.StatusCode}) {response.ReasonPhrase}",
+			// 		"Close"
+			// 	);
+			// 	SettingsWindow.ShowWindow();
+			// 	return;
+			// }
+			if (!FvprApi.WhoAmI.GET(token, out var response, out var errorResponse))
 			{
-				EditorUtility.DisplayDialog(
-					"Unauthorized",
-					"The token is invalid. Please login again.",
-					"Close"
-				);
-				EditorPrefs.DeleteKey(Strings.TokenPref);
-				SettingsWindow.ShowWindow();
-				LoginWindow.ShowWindow();
-				return;
-			}
-			// 403
-			if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-			{
-				var r = JObject.Parse(response.Content.ReadAsStringAsync().Result); 
-				if (!EditorUtility.DisplayDialog(
-					"Forbidden",
-					$"Your account has been locked: {r["reason"].Value<string>()}\n\n" +
-					$"Contact a moderator on our Discord server for more information.",
-					"Close",
-					"Open Discord"
-				))
-					Application.OpenURL($"{Strings.Url}/discord");
-				return;
-			}
-			// Not 200
-			if (response.StatusCode != System.Net.HttpStatusCode.OK)
-			{
+				// 401
+				if (errorResponse.Is(HttpStatusCode.Unauthorized))
+				{
+					EditorUtility.DisplayDialog(
+						"Unauthorized",
+						"The token is invalid. Please login again.",
+						"Close"
+					);
+					EditorPrefs.DeleteKey(Strings.TokenPref);
+					SettingsWindow.ShowWindow();
+					LoginWindow.ShowWindow();
+					return;
+				}
+				// 403
+				if (errorResponse.Is(HttpStatusCode.Forbidden))
+				{
+					if (!EditorUtility.DisplayDialog(
+						"Forbidden",
+						"Your account has been locked!\n\n" +
+						"Contact a moderator on our Discord server for more information.",
+						"Close",
+						"Open Discord"
+					))
+						Application.OpenURL($"https://{Strings.Domain}/discord");
+					return;
+				}
+				// Not 200
 				EditorUtility.DisplayDialog(
 					"Error",
-					$"Failed to get user data: ({response.StatusCode}) {response.ReasonPhrase}",
+					$"Failed to get user data: ({errorResponse.Code}) {errorResponse.Message}",
 					"Close"
 				);
-				SettingsWindow.ShowWindow();
 				return;
 			}
-			// 200
-			var userJson = JObject.Parse(response.Content.ReadAsStringAsync().Result);
-			var scopes = userJson["scopes"].Value<JArray>().Children().Select(x => x.Value<string>()).ToArray();
-			var domains = userJson["domains"].Value<JArray>().Children().Select(x => x.Value<string>()).ToArray();
 			
-			// Make sure the "publish" scope is set
-			if (!scopes.Contains("publish"))
+			// 200
+			
+			// Make sure the "ticket.publish" scope is set
+			if (!response.Scopes.Contains("ticket.publish"))
 			{
 				if (EditorUtility.DisplayDialog(
 					"Unauthorized",
-					$"This token does not have permission to publish packages.",
+					"This token does not have permission to publish packages.",
 					"Fix",
 					"Close"
 				))
@@ -171,12 +219,12 @@ namespace FVPR.Toolbox
 			}
 			
 			// Check if the package name starts with one of the user's domains
-			if (!domains.Any(name.StartsWith))
+			if (!response.Domains.Any(name.StartsWith))
 			{
 				EditorUtility.DisplayDialog(
 					"Unauthorized",
 					$"You are not allowed to publish packages with the name '{name}'.\n\n" +
-					$"Your scopes are: {string.Join(", ", domains)}",
+					$"Your scopes are: {string.Join(", ", response.Domains)}",
 					"Close"
 				);
 				return;
@@ -221,65 +269,189 @@ namespace FVPR.Toolbox
 				EditorUtility.ClearProgressBar();
 			}
 			
-			// Publish
-			EditorUtility.DisplayProgressBar("Publishing package", "Uploading package...", 0.5f);
+			// Open a ticket
+			if (!FvprApi.Auth.Ticket.Open.POST(
+				token,
+				TicketType.PublishPackage,
+				out var ticket,
+				out errorResponse,
+				("name", name),
+				("version", packageJson["version"].Value<string>())
+			))
 			{
+				// Delete the zip file
+				if (File.Exists(tmpPath))
+					File.Delete(tmpPath);
+				
+				// Show error
+				EditorUtility.DisplayDialog(
+					"Error",
+					$"Failed to open a ticket: ({errorResponse.Code}) {errorResponse.Message}",
+					"Close"
+				);
+				return;
+			}
+			
+			// Await confirmation
+			// EditorUtility.DisplayProgressBar(
+			// 	"Publishing package",
+			// 	"Awaiting approval...\n\n" +
+			// 	"Open your FVPR Authenticator app, or visit the url below to confirm the publish request.\n\n" +
+			// 	$"URL: https://{Strings.Domain}/authenticator",
+			// 	0.3f
+			// );
+			EditorUtility.DisplayProgressBar(
+				"Publishing package",
+				"Awaiting approval from the FVPR Authenticator...",
+				0.3f
+			);
+			{
+				// Show a notice, if needed
+				// %localappdata%/FVPR/unity_has_read_app_notice
+				var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FVPR");
+				var file = Path.Combine(dir, "unity_has_read_app_notice");
+				if (!File.Exists(file))
+				{
+					EditorUtility.DisplayDialog(
+						"Notice",
+						"You may need to open the FVPR Authenticator to confirm publishing requests.\n\n" +
+						"We recommend you open the url below on your phone, and add it to your home screen.\n\n" +
+						Strings.AuthenticatorUrl,
+						"Close"
+					);
+					FvprToolbox.Mkdir(dir);
+					File.Create(file).Close();
+				}
+				
+				// Wait for confirmation
+				while (true)
+				{
+					// Get the current status of the ticket
+					if (!FvprApi.Auth.Ticket.Status.GET(ticket.Uid, out var ticketResponse, out errorResponse))
+					{
+						// Delete the zip file
+						if (File.Exists(tmpPath))
+							File.Delete(tmpPath);
+						
+						// Show error
+						EditorUtility.ClearProgressBar();
+						EditorUtility.DisplayDialog(
+							"Error",
+							$"Failed to get ticket status. It may have expired.\n\n" +
+							$"({errorResponse.Code}) {errorResponse.Message}",
+							"Close"
+						);
+						return;
+					}
+
+					var status = ticketResponse.GetStatus();
+					
+					// Check if the ticket has been confirmed
+					if (status == TicketStatus.Approved)
+						break;
+					
+					// Check if the ticket has been denied
+					if (status == TicketStatus.Rejected)
+					{
+						// Delete the zip file
+						if (File.Exists(tmpPath))
+							File.Delete(tmpPath);
+						
+						// Show error
+						EditorUtility.ClearProgressBar();
+						EditorUtility.DisplayDialog(
+							"Rejected",
+							"You have rejected the publish request.",
+							"Close"
+						);
+						return;
+					}
+					
+					// Check if the ticket has expired
+					if (status == TicketStatus.Expired)
+					{
+						// Delete the zip file
+						if (File.Exists(tmpPath))
+							File.Delete(tmpPath);
+						
+						// Show error
+						EditorUtility.ClearProgressBar();
+						EditorUtility.DisplayDialog(
+							"Expired",
+							"The publish request has expired.",
+							"Close"
+						);
+						return;
+					}
+					
+					// If it is anything other than AwaitingApproval, something went wrong
+					if (status != TicketStatus.AwaitingApproval)
+					{
+						// Delete the zip file
+						if (File.Exists(tmpPath))
+							File.Delete(tmpPath);
+						
+						// Show error
+						EditorUtility.ClearProgressBar();
+						EditorUtility.DisplayDialog(
+							"Error",
+							$"An error occurred while awaiting confirmation. The ticket status was '{ticket.Status}'.",
+							"Close"
+						);
+						return;
+					}
+					
+					// Wait a bit
+					Thread.Sleep(1000);
+				}
+			}
+			
+			// Publish
+			EditorUtility.DisplayProgressBar("Publishing package", "Uploading package...", 0.6f);
+			{
+				string errorMessage = null;
 				// Upload
 				try
 				{
-					// using (var httpClient = new HttpClient())
+					// using (var httpClientHandler = new HttpClientHandler())
 					// {
 					// 	var bytes = File.ReadAllBytes(tmpPath);
-					// 	httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-					// 	httpClient.DefaultRequestHeaders.Add("Content-Type", "application/zip");
-					// 	httpClient.DefaultRequestHeaders.Add("Content-Length", bytes.Length.ToString());
-					// 	response = httpClient.PostAsync(
-					// 		$"{Strings.Url}/api/v1/publish?name={name}&version={packageJson["version"].Value<string>()}",
-					// 		new ByteArrayContent(bytes)
-					// 	).Result;
+					// 	httpClientHandler.MaxRequestContentBufferSize = (1024 * 1024) + bytes.Length;
+					// 	
+					// 	using (var httpClient = new HttpClient(httpClientHandler))
+					// 	{
+					// 		httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+					// 		response = httpClient.PostAsync(
+					// 			$"{Strings.Url}/api/v1/publish?name={name}&version={packageJson["version"].Value<string>()}",
+					// 			new ByteArrayContent(bytes)
+					// 		).Result;
+					// 	}
 					// }
-
-					using (var httpClientHandler = new HttpClientHandler())
-					{
-						var bytes = File.ReadAllBytes(tmpPath);
-						httpClientHandler.MaxRequestContentBufferSize = (1024 * 1024) + bytes.Length;
-						
-						using (var httpClient = new HttpClient(httpClientHandler))
-						{
-							httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-							response = httpClient.PostAsync(
-								$"{Strings.Url}/api/v1/publish?name={name}&version={packageJson["version"].Value<string>()}",
-								new ByteArrayContent(bytes)
-							).Result;
-						}
-					}
+					var payload = File.ReadAllBytes(tmpPath);
+					if (!FvprApi.Publish.POST(ticket.Uid, payload, out var error))
+						errorMessage = $"Failed to publish the package: ({error.Code}) {error.Message}";
 				}
 				catch (Exception e)
 				{
 					Debug.LogException(e);
-					EditorUtility.DisplayDialog(
-						"Error",
-						"An error occurred while uploading the package. See the console for more details.",
-						"Close"
-					);
-					return;
+					errorMessage = "An error occurred while uploading the package. See the console for more details.";
 				}
 				finally
 				{
 					EditorUtility.ClearProgressBar();
 					try
 					{
-						// if (File.Exists(tmpPath))
-						// 	File.Delete(tmpPath);
+						if (File.Exists(tmpPath))
+							File.Delete(tmpPath);
 					}
 					catch
 					{
-						Debug.LogWarning($"Failed to delete temporary file '{tmpPath}'");
+						// Debug.LogWarning($"Failed to delete temporary file '{tmpPath}'");
 					}
 				}
 				
 				// Check response
-				if (response.StatusCode == System.Net.HttpStatusCode.OK)
+				if (errorMessage is null)
 				{
 					EditorUtility.DisplayDialog(
 						"Success",
@@ -289,26 +461,7 @@ namespace FVPR.Toolbox
 					AssetDatabase.Refresh();
 				}
 				else
-				{
-					try
-					{
-						var error = JObject.Parse(response.Content.ReadAsStringAsync().Result);
-						var message = error["message"]?.Value<string>() ?? response.ReasonPhrase;
-						EditorUtility.DisplayDialog(
-							$"Failed to publish package ({response.StatusCode})",
-							message,
-							"Close"
-						);
-					}
-					catch
-					{
-						EditorUtility.DisplayDialog(
-							$"Failed to publish package ({response.StatusCode})",
-							response.ReasonPhrase,
-							"Close"
-						);
-					}
-				}
+					EditorUtility.DisplayDialog("Error", errorMessage, "Close");
 			}
 		}
 	}

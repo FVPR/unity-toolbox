@@ -10,6 +10,7 @@ namespace FVPR.Toolbox
 {
 	public class SettingsWindow : EditorWindow
 	{
+		private bool _isOffline;
 		private bool _isLoggedOut;
 		private bool _didError;
 		private bool _tokenIsInvalid;
@@ -62,20 +63,22 @@ namespace FVPR.Toolbox
 			{
 				GUILayout.Label("Account Info", EditorStyles.boldLabel);
 				
-				if (_isLoggedOut)
+				if (_isOffline)
+					LabelWithLoginButton("Cannot connect to the FVPR API");
+				
+				else if (_isLoggedOut)
 					LabelWithLoginButton("You are not logged in");
 				
-				if (_didError) LabelWithLogoutButton("An error occurred while checking your account info", false);
+				else if (_didError) LabelWithLogoutButton("An error occurred while checking your account info", false);
 
-				if (_tokenIsInvalid)
+				else if (_tokenIsInvalid)
 					LabelWithLoginButton("Your token is invalid, maybe it expired?");
 				
-				if (_missingScope) LabelWithLoginButton("The token is missing the 'identify' scope! Please re-login.");
+				else if (_missingScope) LabelWithLoginButton("The token is missing the 'ticket.publish' scope! Please re-login.");
 
-				if (_username != "")
-				{
-					LabelWithLogoutButton($"You are logged in as {_username}", true);
-				}
+				else if (_username != "") LabelWithLogoutButton($"You are logged in as {_username}", true);
+				
+				else LabelWithLogoutButton("Failed to check your account info", false);
 			}
 			EditorGUILayout.EndVertical();
 
@@ -102,9 +105,8 @@ namespace FVPR.Toolbox
 				{
 					var token = EditorPrefs.GetString(Strings.TokenPref, null);
 					EditorPrefs.DeleteKey(Strings.TokenPref);
-					var client = new HttpClient();
-					client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-					_ = client.PostAsync($"{Strings.Url}/api/v1/auth/revoke", null).Result;
+					if (!FvprApi.Auth.Revoke.POST(token, out var error))
+						Debug.LogError(FvprToolbox.MakeLogString("FVPR API", error.Message, "red"));
 					Check();
 				}
 				
@@ -128,13 +130,10 @@ namespace FVPR.Toolbox
 						{
 							var token = EditorPrefs.GetString(Strings.TokenPref, null);
 							EditorPrefs.DeleteKey(Strings.TokenPref);
-							var client = new HttpClient();
-							client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-							var response = client.PostAsync($"{Strings.Url}/api/v1/auth/revoke-all", null).Result;
-							// Parse response
-							var json = JObject.Parse(response.Content.ReadAsStringAsync().Result);
-							var message = json["message"].Value<string>();
-							Debug.Log(FvprToolbox.MakeLogString("FVPR API", message, "cyan"));
+							if (FvprApi.Auth.RevokeAll.POST(token, out var response, out var error))
+								Debug.Log(FvprToolbox.MakeLogString("FVPR API", response, "cyan"));
+							else
+								Debug.LogError(FvprToolbox.MakeLogString("FVPR API", error.Message, "red"));
 							Check();
 						});
 						menu.ShowAsContext();
@@ -153,17 +152,17 @@ namespace FVPR.Toolbox
 				FvprToolbox.Centered(() =>
 				{
 					if (GUILayout.Button("Discord", EditorStyles.linkLabel))
-						Application.OpenURL($"{Strings.Url}/discord");
+						Application.OpenURL($"https://{Strings.Domain}/discord");
 					
 					GUILayout.Label("|");
 					
 					if (GUILayout.Button("API Documentation", EditorStyles.linkLabel))
-						Application.OpenURL($"{Strings.Url}/docs/api");
+						Application.OpenURL($"https://{Strings.Domain}/docs/api");
 					
 					GUILayout.Label("|");
 					
 					if (GUILayout.Button("Terms of Service", EditorStyles.linkLabel))
-						Application.OpenURL($"{Strings.Url}/tos");
+						Application.OpenURL($"https://{Strings.Domain}/tos");
 				});
 #if FVPR_DEV
 				FvprToolbox.Centered(() => GUILayout.Label("DEVELOPER MODE ENABLED"));
@@ -177,11 +176,19 @@ namespace FVPR.Toolbox
 		public void Check()
 		{
 			// Reset
+			_isOffline = false;
 			_isLoggedOut = false;
 			_didError = false;
 			_tokenIsInvalid = false;
 			_missingScope = false;
 			_username = "";
+			
+			// Check if the API is online
+			if (!FvprApi.Ping.HEAD())
+			{
+				_isOffline = true;
+				return;
+			}
 
 			// Check if the user is logged in
 			var token = EditorPrefs.GetString(Strings.TokenPref, null);
@@ -192,44 +199,37 @@ namespace FVPR.Toolbox
 			}
 			
 			// Attempt to get user data
-			// {Strings.Url}/api/v1/whoami
-			// Bearer {token}
-			var client = new HttpClient();
-			client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-			var response = client.GetAsync($"{Strings.Url}/api/v1/whoami").Result;
-			if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+			if (!FvprApi.WhoAmI.GET(token, out var response, out var error))
 			{
-				_tokenIsInvalid = true;
-				EditorPrefs.DeleteKey(Strings.TokenPref);
-				return;
-			}
-			if (response.StatusCode != System.Net.HttpStatusCode.OK)
-			{
-				_didError = true;
-				Debug.LogError($"Failed to get user data: ({response.StatusCode}) {response.ReasonPhrase}");
+				if (error.Code == 401)
+				{
+					_tokenIsInvalid = true;
+					EditorPrefs.DeleteKey(Strings.TokenPref);
+				}
+				else
+				{
+					_didError = true;
+					Debug.LogError($"Failed to get user data: {error.Message}");
+				}
 				return;
 			}
 			
 			// Parse user data
 			try
 			{
-				var raw = response.Content.ReadAsStringAsync().Result;
-				var json = JObject.Parse(raw);
-				_username = json["name"].Value<string>();
 				// Check the scopes object, and see if it contains "publish"
-				var scopes = json["scopes"].ToObject<string[]>();
-				if (scopes == null || scopes.All(s => s != "publish"))
+				if (response.Scopes.All(s => s != "ticket.publish"))
 				{
 					_missingScope = true;
 					EditorPrefs.DeleteKey(Strings.TokenPref);
+					return;
 				}
-				return;
+				_username = response.Username;
 			}
 			catch (Exception e)
 			{
 				_didError = true;
 				Debug.LogError($"Failed to parse user data: {e.Message}");
-				return;
 			}
 		}
 	}
