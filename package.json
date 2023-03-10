@@ -6,7 +6,7 @@
   "author": {
     "name": "FVPR",
     "email": "fvpr@foxscore.mozmail.com",
-    "url": "https://vpm.foxscore.de"
+    "url": "https://fvpr.dev"
   },
   "type": "tool",
   "dependencies": {
@@ -15,5 +15,12 @@
   "vpmDependencies": {
     "com.vrchat.core.vpm-resolver": "^0.1.17"
   },
-  "hideInEditor": true
+  "hideInEditor": true,
+  "license": "MIT",
+  "keywords": [
+    "fvpr",
+    "foxscore",
+    "vpm",
+    "publish"
+  ]
 }
