@@ -121,47 +121,6 @@ namespace FVPR.Toolbox
 			
 			// Get user info
 			var token = EditorPrefs.GetString(Strings.TokenPref);
-			// var client = new HttpClient();
-			// client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-			// var response = client.GetAsync($"{Strings.Url}/api/v1/whoami").Result;
-			// // 401
-			// if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-			// {
-			// 	EditorUtility.DisplayDialog(
-			// 		"Unauthorized",
-			// 		"The token is invalid. Please login again.",
-			// 		"Close"
-			// 	);
-			// 	EditorPrefs.DeleteKey(Strings.TokenPref);
-			// 	SettingsWindow.ShowWindow();
-			// 	LoginWindow.ShowWindow();
-			// 	return;
-			// }
-			// // 403
-			// if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-			// {
-			// 	var r = JObject.Parse(response.Content.ReadAsStringAsync().Result); 
-			// 	if (!EditorUtility.DisplayDialog(
-			// 		"Forbidden",
-			// 		$"Your account has been locked: {r["reason"].Value<string>()}\n\n" +
-			// 		$"Contact a moderator on our Discord server for more information.",
-			// 		"Close",
-			// 		"Open Discord"
-			// 	))
-			// 		Application.OpenURL($"{Strings.Url}/discord");
-			// 	return;
-			// }
-			// // Not 200
-			// if (response.StatusCode != System.Net.HttpStatusCode.OK)
-			// {
-			// 	EditorUtility.DisplayDialog(
-			// 		"Error",
-			// 		$"Failed to get user data: ({response.StatusCode}) {response.ReasonPhrase}",
-			// 		"Close"
-			// 	);
-			// 	SettingsWindow.ShowWindow();
-			// 	return;
-			// }
 			if (!FvprApi.WhoAmI.GET(token, out var response, out var errorResponse))
 			{
 				// 401
@@ -243,7 +202,11 @@ namespace FVPR.Toolbox
 				using (var zipFileStream = File.Create(tmpPath))
 				using (var zip = new ZipArchive(zipFileStream, ZipArchiveMode.Create))
 				{
-					foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+					var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories)
+						.Where(file => !file.Replace('\\', '/').Contains("/.git/"))
+						.ToArray();
+					// ToDo: Apply .gitignore rules (if any)
+					foreach (var file in files)
 					{
 						var entry = zip.CreateEntry(file.Substring(path.Length + 1));
 						using (var entryStream = entry.Open())
