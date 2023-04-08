@@ -269,6 +269,7 @@ namespace FVPR.Toolbox
 				0.3f
 			);
 			{
+#if FEATURE_SHOW_AUTHENTICATOR_NOTICE
 				// Show a notice, if needed
 				// %localappdata%/FVPR/unity_has_read_app_notice
 				var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FVPR");
@@ -285,6 +286,7 @@ namespace FVPR.Toolbox
 					FvprToolbox.Mkdir(dir);
 					File.Create(file).Close();
 				}
+#endif
 				
 				// Wait for confirmation
 				while (true)
